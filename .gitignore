@@ -23,3 +23,4 @@ copilot-instructions.md
 .rtk/
 rtk_tracking.db
 *.rtk-log
+MULTI-AGENT.md

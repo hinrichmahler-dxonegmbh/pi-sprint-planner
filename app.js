@@ -1,9 +1,11 @@
-const STORAGE_KEY = 'pi-sprint-planner-v1';
+const STORAGE_KEY = 'pi-sprint-planner-projects-v1';
+const LEGACY_STORAGE_KEY = 'pi-sprint-planner-v1';
 const THEME_KEY = 'pi-sprint-planner-theme';
 const DEFAULT_CAPACITY = 20;
 const HUES = [215, 145, 35, 280, 0, 190, 320, 95, 255, 15, 170, 45];
 
-let state = load() || defaultState();
+let workspace = loadWorkspace();
+let state = activeProject().board;
 
 function uid() {
     return Math.random().toString(36).slice(2, 10);
@@ -21,6 +23,14 @@ function defaultState() {
     };
 }
 
+function newProject(name) {
+    return { id: uid(), name, board: defaultState() };
+}
+
+function activeProject() {
+    return workspace.projects.find(p => p.id === workspace.activeId) ?? workspace.projects[0];
+}
+
 let saveTimer = null;
 
 function save() {
@@ -31,7 +41,7 @@ function save() {
 function flushSave() {
     clearTimeout(saveTimer);
     saveTimer = null;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace));
 }
 
 addEventListener('visibilitychange', () => {
@@ -41,19 +51,42 @@ addEventListener('pagehide', () => {
     if (saveTimer) flushSave();
 });
 
-function load() {
+function loadWorkspace() {
+    const stored = read(STORAGE_KEY, normalizeWorkspace);
+    if (stored) return stored;
+
+    // a board saved before projects existed becomes the first project
+    const legacy = read(LEGACY_STORAGE_KEY, normalize);
+    const first = newProject('Project 1');
+    if (legacy) first.board = legacy;
+    return { activeId: first.id, projects: [first] };
+}
+
+function read(key, parse) {
     try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return null;
-        return normalize(JSON.parse(raw));
+        const raw = localStorage.getItem(key);
+        return raw ? parse(JSON.parse(raw)) : null;
     } catch {
         return null;
     }
 }
 
+function normalizeWorkspace(data) {
+    if (!data || !Array.isArray(data.projects)) return null;
+    const projects = data.projects.reduce((list, p) => {
+        const board = normalize(p?.board);
+        if (board) list.push({ id: p.id || uid(), name: String(p.name || 'Project'), board });
+        return list;
+    }, []);
+    if (!projects.length) return null;
+    const activeId = projects.some(p => p.id === data.activeId) ? data.activeId : projects[0].id;
+    return { activeId, projects };
+}
+
 function normalize(data) {
     if (!data || !Array.isArray(data.sprints) || !Array.isArray(data.features)) return null;
     data.features.forEach((f, i) => {
+        if (!Array.isArray(f.stories)) f.stories = [];
         if (typeof f.hue !== 'number') f.hue = HUES[i % HUES.length];
     });
     return data;
@@ -415,6 +448,12 @@ function timestamp() {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
 }
 
+// exports are named after the project they came from
+function fileBase() {
+    const slug = activeProject().name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    return `pi-plan_${slug || 'project'}_${timestamp()}`;
+}
+
 function iconButton(label, onClick) {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -424,6 +463,91 @@ function iconButton(label, onClick) {
     btn.textContent = '✕';
     btn.addEventListener('click', onClick);
     return btn;
+}
+
+/* ---------- projects ---------- */
+
+const tabsEl = document.getElementById('tabs');
+
+function renderTabs() {
+    tabsEl.replaceChildren();
+
+    workspace.projects.forEach(project => {
+        const isActive = project.id === workspace.activeId;
+        const tab = el('div', `tab${isActive ? ' active' : ''}`, t => {
+            const open = el('button', 'tab-name', b => {
+                b.type = 'button';
+                b.textContent = project.name;
+                b.title = 'Open project · double-click to rename';
+                b.setAttribute('aria-current', String(isActive));
+                b.addEventListener('click', () => openProject(project.id));
+                b.addEventListener('dblclick', () => renameProject(project.id));
+            });
+            t.append(open);
+            if (workspace.projects.length > 1) {
+                t.append(iconButton(`Delete project ${project.name}`, () => removeProject(project.id)));
+            }
+        });
+        tabsEl.append(tab);
+    });
+
+    tabsEl.append(el('button', 'tab-add', b => {
+        b.type = 'button';
+        b.textContent = '+ Project';
+        b.title = 'Add project';
+        b.addEventListener('click', addProject);
+    }));
+
+    document.title = `${activeProject().name} — PI Sprint Planner`;
+}
+
+function openProject(projectId) {
+    if (projectId === workspace.activeId) return;
+    const project = workspace.projects.find(p => p.id === projectId);
+    if (!project) return;
+    workspace.activeId = project.id;
+    state = project.board;
+    save();
+    renderTabs();
+    render();
+}
+
+function addProject() {
+    const project = newProject(`Project ${workspace.projects.length + 1}`);
+    workspace.projects.push(project);
+    workspace.activeId = project.id;
+    state = project.board;
+    save();
+    renderTabs();
+    render();
+}
+
+function renameProject(projectId) {
+    const project = workspace.projects.find(p => p.id === projectId);
+    if (!project) return;
+    const name = prompt('Project name', project.name);
+    if (name === null) return;
+    project.name = name.trim() || project.name;
+    save();
+    renderTabs();
+}
+
+function removeProject(projectId) {
+    if (workspace.projects.length < 2) return;
+    const index = workspace.projects.findIndex(p => p.id === projectId);
+    if (index < 0) return;
+    const project = workspace.projects[index];
+    if (!confirm(`Delete project "${project.name}" and everything in it?`)) return;
+
+    workspace.projects.splice(index, 1);
+    if (workspace.activeId === projectId) {
+        const next = workspace.projects[Math.min(index, workspace.projects.length - 1)];
+        workspace.activeId = next.id;
+        state = next.board;
+    }
+    save();
+    renderTabs();
+    render();
 }
 
 /* ---------- toolbar ---------- */
@@ -447,8 +571,10 @@ applyTheme(localStorage.getItem(THEME_KEY)
     || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
 
 document.getElementById('resetBtn').addEventListener('click', () => {
-    if (!confirm('Reset the whole board?')) return;
+    const project = activeProject();
+    if (!confirm(`Reset the board of "${project.name}"?`)) return;
     state = defaultState();
+    project.board = state;
     save();
     render();
 });
@@ -514,7 +640,7 @@ function download(blob, filename) {
 
 function exportJson() {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-    download(blob, `pi-plan_${timestamp()}.json`);
+    download(blob, `${fileBase()}.json`);
 }
 
 function csvCell(value) {
@@ -552,7 +678,7 @@ function exportCsv() {
     ];
 
     const csv = rows.map(r => r.map(csvCell).join(',')).join('\r\n');
-    download(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }), `pi-plan_${timestamp()}.csv`);
+    download(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }), `${fileBase()}.csv`);
 }
 
 /* ---- XLSX: minimal OOXML package, zipped with stored (uncompressed) entries ---- */
@@ -749,7 +875,7 @@ function exportXlsx() {
         { name: 'xl/worksheets/sheet1.xml', data: sheet }
     ];
 
-    download(zip(files), `pi-plan_${timestamp()}.xlsx`);
+    download(zip(files), `${fileBase()}.xlsx`);
 }
 
 function solidFill(argb) {
@@ -780,8 +906,8 @@ function exportMarkdown() {
 
     lines.push(`| Total | ${cols.map(c => columnLoad(c.id)).join(' | ')} |`);
 
-    const md = `# PI Plan — ${new Date().toLocaleString()}\n\n${lines.join('\n')}\n`;
-    download(new Blob([md], { type: 'text/markdown;charset=utf-8' }), `pi-plan_${timestamp()}.md`);
+    const md = `# ${activeProject().name} — PI Plan — ${new Date().toLocaleString()}\n\n${lines.join('\n')}\n`;
+    download(new Blob([md], { type: 'text/markdown;charset=utf-8' }), `${fileBase()}.md`);
 }
 
 /* ---- JPG: the board is redrawn on a canvas so the image is not clipped by scroll ---- */
@@ -1001,7 +1127,7 @@ function exportJpg() {
     });
 
     canvas.toBlob(blob => {
-        if (blob) download(blob, `pi-plan_${timestamp()}.jpg`);
+        if (blob) download(blob, `${fileBase()}.jpg`);
     }, 'image/jpeg', 0.92);
 }
 
@@ -1016,6 +1142,7 @@ importFile.addEventListener('change', async () => {
         const imported = normalize(data);
         if (!imported) throw new Error('bad shape');
         state = imported;
+        activeProject().board = state;
         save();
         render();
     } catch {
@@ -1023,4 +1150,5 @@ importFile.addEventListener('change', async () => {
     }
 });
 
+renderTabs();
 render();
