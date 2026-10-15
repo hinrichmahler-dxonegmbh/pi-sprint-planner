@@ -39,15 +39,23 @@ export function nextHue() {
     return HUES.find(h => !used.has(h)) ?? HUES[current.features.length % HUES.length];
 }
 
+export function defaultProjectJira() {
+    return {
+        jiraBaseUrl: '',
+        featureProjectKey: '',
+        storyProjectKey: ''
+    };
+}
+
 export function defaultState() {
     return {
         sprints: Array.from({ length: 5 }, (_, i) => ({ id: uid(), name: `Sprint ${i + 1}`, capacity: DEFAULT_CAPACITY })),
-        features: Array.from({ length: 3 }, (_, i) => ({ id: uid(), name: `Feature ${i + 1}`, hue: HUES[i], stories: [] }))
+        features: Array.from({ length: 3 }, (_, i) => ({ id: uid(), name: `Feature ${i + 1}`, hue: HUES[i], jiraKey: '', stories: [] }))
     };
 }
 
 export function newProject(name) {
-    return { id: uid(), name, board: defaultState() };
+    return { id: uid(), name, board: defaultState(), jira: defaultProjectJira() };
 }
 
 export function activeProject() {
@@ -92,11 +100,27 @@ export function read(key, parse) {
     }
 }
 
+export function normalizeProject(project) {
+    const board = normalize(project?.board);
+    if (!board) return null;
+    const jira = project?.jira && typeof project.jira === 'object' ? project.jira : {};
+    return {
+        id: project?.id || uid(),
+        name: String(project?.name || 'Project'),
+        board,
+        jira: {
+            jiraBaseUrl: typeof jira.jiraBaseUrl === 'string' ? jira.jiraBaseUrl.trim() : '',
+            featureProjectKey: typeof jira.featureProjectKey === 'string' ? jira.featureProjectKey.trim() : '',
+            storyProjectKey: typeof jira.storyProjectKey === 'string' ? jira.storyProjectKey.trim() : ''
+        }
+    };
+}
+
 export function normalizeWorkspace(data) {
     if (!data || !Array.isArray(data.projects)) return null;
     const projects = data.projects.reduce((list, p) => {
-        const board = normalize(p?.board);
-        if (board) list.push({ id: p.id || uid(), name: String(p.name || 'Project'), board });
+        const project = normalizeProject(p);
+        if (project) list.push(project);
         return list;
     }, []);
     if (!projects.length) return null;
@@ -109,6 +133,11 @@ export function normalize(data) {
     data.features.forEach((f, i) => {
         if (!Array.isArray(f.stories)) f.stories = [];
         if (typeof f.hue !== 'number') f.hue = HUES[i % HUES.length];
+        if (typeof f.jiraKey !== 'string') f.jiraKey = '';
+        f.stories.forEach(story => {
+            if (typeof story.jiraKey !== 'string') story.jiraKey = '';
+            if (typeof story.points !== 'number') story.points = Number(story.points) || 0;
+        });
     });
     return data;
 }

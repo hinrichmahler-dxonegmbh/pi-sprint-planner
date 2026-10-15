@@ -24,7 +24,7 @@ export function setViewCallbacks(callbacks) {
 
 export function addFeature() {
     const current = getState();
-    current.features.push({ id: uid(), name: `Feature ${current.features.length + 1}`, hue: nextHue(), stories: [] });
+    current.features.push({ id: uid(), name: `Feature ${current.features.length + 1}`, hue: nextHue(), jiraKey: '', stories: [] });
     save();
     uiHandlers.renderBoard?.();
 }
@@ -66,7 +66,7 @@ export function addStory(featureId) {
     const current = getState();
     const feature = current.features.find(f => f.id === featureId);
     if (!feature) return;
-    feature.stories.push({ id: uid(), title: `Story ${feature.stories.length + 1}`, points: 3, sprintId: null });
+    feature.stories.push({ id: uid(), title: `Story ${feature.stories.length + 1}`, points: 3, jiraKey: '', sprintId: null });
     save();
     uiHandlers.renderBoard?.();
 }
@@ -121,7 +121,12 @@ export function addProject() {
     const project = {
         id: uid(),
         name: `Project ${ws.projects.length + 1}`,
-        board: defaultState()
+        board: defaultState(),
+        jira: {
+            jiraBaseUrl: '',
+            featureProjectKey: '',
+            storyProjectKey: ''
+        }
     };
     ws.projects.push(project);
     ws.activeId = project.id;

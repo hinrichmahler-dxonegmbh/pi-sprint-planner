@@ -3,6 +3,140 @@ import { uiHandlers } from './actions.js';
 
 export const board = document.getElementById('board');
 export const refs = { sprints: new Map(), features: new Map(), backlogLoad: null, backlogTotal: null };
+const configEl = document.getElementById('projectConfig');
+
+export function jiraIssueHref(baseUrl, projectKey, ticketKey) {
+    const cleanBase = (baseUrl || '').trim();
+    const cleanProjectKey = (projectKey || '').trim();
+    const cleanKey = (ticketKey || '').trim().replace(/\D/g, '');
+    if (!cleanBase || !cleanKey) return null;
+    const key = cleanProjectKey ? `${cleanProjectKey}-${cleanKey}` : cleanKey;
+    const safeBase = cleanBase.replace(/\/+$/, '');
+    return `${safeBase}/browse/${encodeURIComponent(key)}`;
+}
+
+export function jiraKeyLink(projectKey, ticketKey, baseUrl) {
+    const cleanProjectKey = (projectKey || '').trim();
+    const cleanKey = (ticketKey || '').trim().replace(/\D/g, '');
+    if (!cleanProjectKey && !cleanKey) return null;
+    const href = jiraIssueHref(baseUrl, cleanProjectKey, cleanKey);
+    const link = document.createElement('a');
+    link.className = 'jira-key-link';
+    link.href = href || '#';
+    link.target = href ? '_blank' : undefined;
+    link.rel = href ? 'noopener noreferrer' : undefined;
+    link.textContent = cleanProjectKey ? `${cleanProjectKey}-` : cleanKey || 'Jira';
+    link.title = href ? `Open ${cleanProjectKey ? `${cleanProjectKey}-${cleanKey}` : cleanKey} in Jira` : 'Jira issue key';
+    if (!href) {
+        link.removeAttribute('target');
+        link.removeAttribute('rel');
+    }
+    return link;
+}
+
+function syncIssueInput(projectKey, issueInput, baseUrl, value, keyRow) {
+    const nextValue = (value || '').replace(/\D/g, '');
+    if (issueInput.value !== nextValue) issueInput.value = nextValue;
+    const prefix = keyRow.querySelector('.jira-key-link, .jira-key-placeholder');
+    const q = projectKey ? `${projectKey}-` : 'Jira';
+    const href = jiraIssueHref(baseUrl, projectKey, nextValue);
+    if (projectKey) {
+        const link = jiraKeyLink(projectKey, nextValue, baseUrl);
+        if (link) {
+            if (!prefix || prefix.className !== 'jira-key-link') {
+                keyRow.replaceChildren(link, issueInput);
+            } else {
+                prefix.href = link.href;
+                prefix.textContent = link.textContent;
+                prefix.title = link.title;
+            }
+        } else {
+            if (!prefix || prefix.className !== 'jira-key-placeholder') {
+                const staticPrefix = document.createElement('span');
+                staticPrefix.className = 'jira-key-placeholder';
+                staticPrefix.textContent = `${projectKey}-`;
+                keyRow.replaceChildren(staticPrefix, issueInput);
+            } else {
+                prefix.textContent = `${projectKey}-`;
+            }
+        }
+    } else {
+        if (!prefix || prefix.className !== 'jira-key-placeholder') {
+            const fallback = document.createElement('span');
+            fallback.className = 'jira-key-placeholder';
+            fallback.textContent = 'JIRA-';
+            keyRow.replaceChildren(fallback, issueInput);
+        } else {
+            prefix.textContent = 'JIRA-';
+        }
+    }
+    return nextValue;
+}
+
+export function renderProjectConfig() {
+    const project = activeProject();
+    if (!project) {
+        configEl.replaceChildren();
+        return;
+    }
+
+    const jira = project.jira || {};
+    configEl.replaceChildren(el('div', 'config-panel', panel => {
+        panel.append(el('div', 'config-header', header => {
+            header.textContent = 'Jira settings';
+        }));
+
+        const grid = el('div', 'config-grid');
+
+        const jiraBaseUrl = document.createElement('label');
+        jiraBaseUrl.className = 'config-field';
+        jiraBaseUrl.innerHTML = '<span>Jira instance URL</span>';
+        const baseField = document.createElement('input');
+        baseField.type = 'url';
+        baseField.placeholder = 'https://jira.example.com';
+        baseField.value = jira.jiraBaseUrl || '';
+        baseField.addEventListener('input', () => {
+            project.jira = project.jira || {};
+            project.jira.jiraBaseUrl = baseField.value.trim();
+            uiHandlers.save?.();
+            uiHandlers.renderBoard?.();
+        });
+        jiraBaseUrl.append(baseField);
+        grid.append(jiraBaseUrl);
+
+        const featureProjectKey = document.createElement('label');
+        featureProjectKey.className = 'config-field';
+        featureProjectKey.innerHTML = '<span>Feature project key</span>';
+        const featureField = document.createElement('input');
+        featureField.type = 'text';
+        featureField.placeholder = 'PROJ';
+        featureField.value = jira.featureProjectKey || '';
+        featureField.addEventListener('input', () => {
+            project.jira = project.jira || {};
+            project.jira.featureProjectKey = featureField.value.trim();
+            uiHandlers.save?.();
+        });
+        featureProjectKey.append(featureField);
+        grid.append(featureProjectKey);
+
+        const storyProjectKey = document.createElement('label');
+        storyProjectKey.className = 'config-field';
+        storyProjectKey.innerHTML = '<span>Story project key</span>';
+        const storyField = document.createElement('input');
+        storyField.type = 'text';
+        storyField.placeholder = 'STORY';
+        storyField.value = jira.storyProjectKey || '';
+        storyField.addEventListener('input', () => {
+            project.jira = project.jira || {};
+            project.jira.storyProjectKey = storyField.value.trim();
+            uiHandlers.save?.();
+        });
+        storyProjectKey.append(storyField);
+        grid.append(storyProjectKey);
+
+        panel.append(grid);
+    }));
+}
 
 export function renderBoard() {
     refs.sprints.clear();
@@ -46,6 +180,7 @@ export function renderBoard() {
 
     refreshTotals();
     autosizeAll(board.querySelectorAll('textarea'));
+    renderProjectConfig();
 }
 
 export function sprintHeader(sprint) {
@@ -94,6 +229,25 @@ export function featureCell(feature) {
         const meta = el('div', 'feature-meta');
         refs.features.set(feature.id, meta);
         c.append(meta);
+
+        const projectKey = activeProject()?.jira?.featureProjectKey || '';
+        const keyRow = el('div', 'jira-key-row');
+        const issueInput = document.createElement('input');
+        issueInput.type = 'text';
+        issueInput.inputMode = 'numeric';
+        issueInput.pattern = '[0-9]*';
+        issueInput.placeholder = 'Issue #';
+        issueInput.className = 'jira-number-field';
+        issueInput.value = feature.jiraKey || '';
+        issueInput.addEventListener('input', () => {
+            feature.jiraKey = issueInput.value.replace(/\D/g, '');
+            if (issueInput.value !== feature.jiraKey) issueInput.value = feature.jiraKey;
+            uiHandlers.save?.();
+            syncIssueInput(projectKey, issueInput, activeProject()?.jira?.jiraBaseUrl || '', feature.jiraKey, keyRow);
+        });
+        syncIssueInput(projectKey, issueInput, activeProject()?.jira?.jiraBaseUrl || '', feature.jiraKey, keyRow);
+        c.append(keyRow);
+
         const add = el('button', 'add-story', b => {
             b.type = 'button';
             b.textContent = '+ Story';
@@ -137,10 +291,33 @@ export function storyChip(story, feature) {
         node.setAttribute('aria-hidden', 'true');
     });
 
+    const content = document.createElement('div');
+    content.className = 'story-content';
+
+    const titleRow = el('div', 'story-title-row');
     const title = nameField('story-title', story.title, value => {
         story.title = value;
         uiHandlers.save?.();
     });
+    titleRow.append(title, iconButton('Remove story', () => uiHandlers.removeStory?.(story.id)));
+
+    const keyRow = document.createElement('div');
+    keyRow.className = 'story-key-row';
+    const projectKey = activeProject()?.jira?.storyProjectKey || '';
+    const issueInput = document.createElement('input');
+    issueInput.type = 'text';
+    issueInput.inputMode = 'numeric';
+    issueInput.pattern = '[0-9]*';
+    issueInput.placeholder = 'Issue #';
+    issueInput.className = 'story-jira-key';
+    issueInput.value = story.jiraKey || '';
+    issueInput.addEventListener('input', () => {
+        story.jiraKey = issueInput.value.replace(/\D/g, '');
+        if (issueInput.value !== story.jiraKey) issueInput.value = story.jiraKey;
+        uiHandlers.save?.();
+        syncIssueInput(projectKey, issueInput, activeProject()?.jira?.jiraBaseUrl || '', story.jiraKey, keyRow);
+    });
+    syncIssueInput(projectKey, issueInput, activeProject()?.jira?.jiraBaseUrl || '', story.jiraKey, keyRow);
 
     const points = document.createElement('input');
     points.className = 'points';
@@ -154,12 +331,16 @@ export function storyChip(story, feature) {
         refreshTotals();
     });
 
+    const metaRow = el('div', 'story-meta-row');
+    metaRow.append(keyRow, points);
+
     [title, points].forEach(input => {
         input.addEventListener('pointerdown', () => { chip.draggable = false; });
         input.addEventListener('blur', () => { chip.draggable = true; });
     });
 
-    chip.append(handle, title, points, iconButton('Remove story', () => uiHandlers.removeStory?.(story.id)));
+    content.append(titleRow, metaRow);
+    chip.append(handle, content);
 
     chip.addEventListener('dragstart', e => {
         e.dataTransfer.setData('text/plain', story.id);
