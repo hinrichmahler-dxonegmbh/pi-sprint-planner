@@ -4,6 +4,8 @@ import { uiHandlers } from './actions.js';
 export const board = document.getElementById('board');
 export const refs = { sprints: new Map(), features: new Map(), backlogLoad: null, backlogTotal: null };
 const configEl = document.getElementById('projectConfig');
+let configRenderTimer = null;
+let configFieldFocus = null;
 
 export function jiraIssueHref(baseUrl, projectKey, ticketKey) {
     const cleanBase = (baseUrl || '').trim();
@@ -95,11 +97,12 @@ export function renderProjectConfig() {
         baseField.type = 'url';
         baseField.placeholder = 'https://jira.example.com';
         baseField.value = jira.jiraBaseUrl || '';
+        baseField.dataset.configField = 'jiraBaseUrl';
         baseField.addEventListener('input', () => {
             project.jira = project.jira || {};
             project.jira.jiraBaseUrl = baseField.value.trim();
             uiHandlers.save?.();
-            uiHandlers.renderBoard?.();
+            scheduleBoardRender(baseField);
         });
         jiraBaseUrl.append(baseField);
         grid.append(jiraBaseUrl);
@@ -111,10 +114,12 @@ export function renderProjectConfig() {
         featureField.type = 'text';
         featureField.placeholder = 'PROJ';
         featureField.value = jira.featureProjectKey || '';
+        featureField.dataset.configField = 'featureProjectKey';
         featureField.addEventListener('input', () => {
             project.jira = project.jira || {};
             project.jira.featureProjectKey = featureField.value.trim();
             uiHandlers.save?.();
+            scheduleBoardRender(featureField);
         });
         featureProjectKey.append(featureField);
         grid.append(featureProjectKey);
@@ -126,10 +131,12 @@ export function renderProjectConfig() {
         storyField.type = 'text';
         storyField.placeholder = 'STORY';
         storyField.value = jira.storyProjectKey || '';
+        storyField.dataset.configField = 'storyProjectKey';
         storyField.addEventListener('input', () => {
             project.jira = project.jira || {};
             project.jira.storyProjectKey = storyField.value.trim();
             uiHandlers.save?.();
+            scheduleBoardRender(storyField);
         });
         storyProjectKey.append(storyField);
         grid.append(storyProjectKey);
@@ -484,4 +491,19 @@ export function renderTabs() {
     }));
 
     document.title = `${activeProject().name} — PI Sprint Planner`;
+}
+
+export function scheduleBoardRender(focusInput) {
+    if (configRenderTimer) clearTimeout(configRenderTimer);
+    const target = focusInput && focusInput instanceof HTMLInputElement ? focusInput : document.activeElement;
+    configFieldFocus = target && target.dataset && target.dataset.configField ? target.dataset.configField : null;
+    configRenderTimer = setTimeout(() => {
+        uiHandlers.renderBoard?.();
+        requestAnimationFrame(() => {
+            if (!configFieldFocus) return;
+            const nextField = configEl.querySelector(`[data-config-field="${configFieldFocus}"]`);
+            if (nextField && document.activeElement !== nextField) nextField.focus();
+            configFieldFocus = null;
+        });
+    }, 250);
 }
