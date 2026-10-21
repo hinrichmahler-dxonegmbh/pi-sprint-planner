@@ -563,6 +563,39 @@ textarea.story-title:focus {
     color: var(--text);
 }
 
+
+
+/* ---- totals ---- */
+.row-total,
+.total-cell {
+    background: var(--total-bg);
+    font-family: var(--font-data);
+    font-weight: 600;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.total-cell small {
+    display: block;
+    font-weight: 400;
+    color: var(--muted);
+}
+
+.total-cell.ok small {
+    color: var(--ok);
+}
+
+.total-cell.over,
+.total-cell.over small {
+    color: var(--over);
+    font-weight: 700;
+}
+
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button {
+    opacity: 1;
+}
+
 input[type=number]::-webkit-outer-spin-button,
 input[type=number]::-webkit-inner-spin-button {
     -webkit-appearance: none;
