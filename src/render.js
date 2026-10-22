@@ -7,6 +7,18 @@ const configEl = document.getElementById('projectConfig');
 let configRenderTimer = null;
 let configFieldFocus = null;
 
+function extractTicketNumber(ticketKey) {
+    const value = String(ticketKey ?? '').trim();
+    if (!value) return '';
+    const normalized = value.toUpperCase();
+    const explicit = normalized.match(/^([A-Z][A-Z0-9_]*)-(\d+)$/);
+    if (explicit) return explicit[2];
+    const digitsOnly = normalized.match(/^(\d+)$/);
+    if (digitsOnly) return digitsOnly[1];
+    const tail = normalized.match(/(\d+)$/);
+    return tail ? tail[1] : '';
+}
+
 export function jiraIssueHref(baseUrl, projectKey, ticketKey) {
     const cleanBase = (baseUrl || '').trim();
     const cleanProjectKey = (projectKey || '').trim();
@@ -19,7 +31,7 @@ export function jiraIssueHref(baseUrl, projectKey, ticketKey) {
 
 export function jiraKeyLink(projectKey, ticketKey, baseUrl) {
     const cleanProjectKey = (projectKey || '').trim();
-    const cleanKey = (ticketKey || '').trim().replace(/\D/g, '');
+    const cleanKey = extractTicketNumber(ticketKey);
     if (!cleanProjectKey && !cleanKey) return null;
     const href = jiraIssueHref(baseUrl, cleanProjectKey, cleanKey);
     const link = document.createElement('a');
@@ -37,7 +49,7 @@ export function jiraKeyLink(projectKey, ticketKey, baseUrl) {
 }
 
 function syncIssueInput(projectKey, issueInput, baseUrl, value, keyRow) {
-    const nextValue = (value || '').replace(/\D/g, '');
+    const nextValue = extractTicketNumber(value);
     if (issueInput.value !== nextValue) issueInput.value = nextValue;
     const prefix = keyRow.querySelector('.jira-key-link, .jira-key-placeholder');
     const q = projectKey ? `${projectKey}-` : 'Jira';
@@ -247,7 +259,7 @@ export function featureCell(feature) {
         issueInput.className = 'jira-number-field';
         issueInput.value = feature.jiraKey || '';
         issueInput.addEventListener('input', () => {
-            feature.jiraKey = issueInput.value.replace(/\D/g, '');
+            feature.jiraKey = extractTicketNumber(issueInput.value);
             if (issueInput.value !== feature.jiraKey) issueInput.value = feature.jiraKey;
             uiHandlers.save?.();
             syncIssueInput(projectKey, issueInput, activeProject()?.jira?.jiraBaseUrl || '', feature.jiraKey, keyRow);
@@ -319,7 +331,7 @@ export function storyChip(story, feature) {
     issueInput.className = 'story-jira-key';
     issueInput.value = story.jiraKey || '';
     issueInput.addEventListener('input', () => {
-        story.jiraKey = issueInput.value.replace(/\D/g, '');
+        story.jiraKey = extractTicketNumber(issueInput.value);
         if (issueInput.value !== story.jiraKey) issueInput.value = story.jiraKey;
         uiHandlers.save?.();
         syncIssueInput(projectKey, issueInput, activeProject()?.jira?.jiraBaseUrl || '', story.jiraKey, keyRow);

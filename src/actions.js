@@ -183,9 +183,115 @@ function nextHue() {
     return [215, 145, 35, 280, 0, 190, 320, 95, 255, 15, 170, 45].find(h => !used.has(h)) ?? [215, 145, 35, 280, 0, 190, 320, 95, 255, 15, 170, 45][current.features.length % 12];
 }
 
+function normalizeProjectKey(value) {
+    return String(value ?? '').trim().toUpperCase().replace(/[^A-Z0-9_]/g, '');
+}
+
+function parseIssueKey(raw) {
+    const value = String(raw ?? '').trim();
+    if (!value) return null;
+    const normalized = value.toUpperCase();
+    const explicit = normalized.match(/^([A-Z][A-Z0-9_]*)-(\d+)$/);
+    if (explicit) {
+        return { projectKey: explicit[1], ticket: explicit[2], fullKey: `${explicit[1]}-${explicit[2]}` };
+    }
+    const implicit = normalized.match(/^(\d+)$/);
+    if (implicit) {
+        return { projectKey: '', ticket: implicit[1], fullKey: implicit[1] };
+    }
+    return null;
+}
+
+function validateIssueCollection(items, label, configuredProjectKey) {
+    const explicitPrefixes = new Set();
+    const seen = new Set();
+    let effectiveProjectKey = normalizeProjectKey(configuredProjectKey);
+
+    for (const item of items) {
+        const raw = String(item?.jiraKey ?? '').trim();
+        if (!raw) continue;
+
+        const parsed = parseIssueKey(raw);
+        if (!parsed) {
+            throw new Error(`${label} key "${raw}" is not a valid Jira issue key.`);
+        }
+
+        const candidateProjectKey = parsed.projectKey || effectiveProjectKey;
+        if (!candidateProjectKey) {
+            throw new Error(`${label} key "${raw}" is missing a project prefix. Configure the ${label.toLowerCase()} project key first.`);
+        }
+
+        if (parsed.projectKey) {
+            explicitPrefixes.add(parsed.projectKey);
+            if (!effectiveProjectKey || parsed.projectKey !== effectiveProjectKey) {
+                effectiveProjectKey = parsed.projectKey;
+            }
+        }
+
+        const finalKey = `${candidateProjectKey}-${parsed.ticket}`;
+        if (seen.has(finalKey)) {
+            throw new Error(`${label} keys must be unique. Duplicate detected: "${finalKey}".`);
+        }
+        seen.add(finalKey);
+    }
+
+    if (explicitPrefixes.size > 1) {
+        const prefixes = [...explicitPrefixes].join(', ');
+        throw new Error(`${label} keys must all use a single project prefix. Found: ${prefixes}.`);
+    }
+
+    return effectiveProjectKey || [...explicitPrefixes][0] || '';
+}
+
 export function importProjectData(data) {
     const imported = normalize(data);
     if (!imported) throw new Error('bad shape');
+
+    const project = activeProject();
+    const configuredFeatureKey = normalizeProjectKey(project?.jira?.featureProjectKey);
+    const configuredStoryKey = normalizeProjectKey(project?.jira?.storyProjectKey);
+
+    const featureProjectKey = validateIssueCollection(imported.features, 'Feature', configuredFeatureKey);
+    const storyProjectKey = validateIssueCollection(
+        imported.features.flatMap(feature => feature.stories || []),
+        'Story',
+        configuredStoryKey
+    );
+
+    imported.features.forEach(feature => {
+        const raw = String(feature?.jiraKey ?? '').trim();
+        if (!raw) {
+            feature.jiraKey = featureProjectKey ? `${featureProjectKey}-${String(feature.jiraKey || '').replace(/\D/g, '')}` : '';
+            return;
+        }
+        const parsed = parseIssueKey(raw);
+        if (!parsed) {
+            throw new Error(`Feature key "${raw}" is not a valid Jira issue key.`);
+        }
+        feature.jiraKey = `${parsed.projectKey || featureProjectKey}-${parsed.ticket}`;
+    });
+
+    imported.features.forEach(feature => {
+        (feature.stories || []).forEach(story => {
+            const raw = String(story?.jiraKey ?? '').trim();
+            if (!raw) {
+                story.jiraKey = storyProjectKey ? `${storyProjectKey}-${String(story.jiraKey || '').replace(/\D/g, '')}` : '';
+                return;
+            }
+            const parsed = parseIssueKey(raw);
+            if (!parsed) {
+                throw new Error(`Story key "${raw}" is not a valid Jira issue key.`);
+            }
+            story.jiraKey = `${parsed.projectKey || storyProjectKey}-${parsed.ticket}`;
+        });
+    });
+
+    if (project) {
+        project.jira = project.jira || {};
+        project.jira.featureProjectKey = featureProjectKey || configuredFeatureKey || '';
+        project.jira.storyProjectKey = storyProjectKey || configuredStoryKey || '';
+    }
+
     setState(imported);
     const currentProject = activeProject();
     if (currentProject) currentProject.board = imported;

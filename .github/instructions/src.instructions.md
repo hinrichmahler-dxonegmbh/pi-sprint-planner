@@ -32,3 +32,9 @@ Applies to all files under `src/`.
 ## Instruction maintenance rule
 - If a change affects module boundaries, startup flow, responsibilities, persistence behavior, rendering logic, or export behavior, update `.github/instructions/*.instructions.md` before finishing the work.
 - Do not leave instruction files stale after source refactors.
+
+## Jira key conventions
+- Exported feature and story keys must include the configured Jira project prefix as `PROJECT-123` when a ticket number is present.
+- JSON import validation must reject inconsistent project prefixes within a feature-story collection and reject missing project prefixes when the frontend configuration is empty.
+- When an imported JSON payload includes a consistent project prefix, that imported prefix overrides the frontend configuration for that collection.
+- Frontend-configured project keys only fill in missing prefixes for numeric ticket IDs such as `123`.

@@ -86,8 +86,8 @@ importFile.addEventListener('change', async () => {
     try {
         const data = JSON.parse(await file.text());
         importProjectData(data);
-    } catch {
-        alert('That file is not a valid PI plan export.');
+    } catch (e) {
+        alert('That file is not a valid PI plan export: ' + e.message);
     }
 });
 

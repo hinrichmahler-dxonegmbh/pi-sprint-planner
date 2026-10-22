@@ -1,5 +1,93 @@
 import { state, activeProject, fileBase } from './state.js';
 
+function normalizeProjectKey(projectKey) {
+    return String(projectKey ?? '').trim().toUpperCase();
+}
+
+function parseIssueKey(ticketKey) {
+    const value = String(ticketKey ?? '').trim();
+    if (!value) return null;
+    const upper = value.toUpperCase();
+    const explicit = upper.match(/^([A-Z][A-Z0-9_]*)-(\d+)$/);
+    if (explicit) return { projectKey: explicit[1], ticket: explicit[2] };
+    const digits = upper.replace(/\D/g, '');
+    if (!digits) return null;
+    return { projectKey: '', ticket: digits };
+}
+
+export function jiraKey(projectKey, ticketKey) {
+    const parsed = parseIssueKey(ticketKey);
+    if (!parsed) return '';
+    const configured = normalizeProjectKey(projectKey);
+    if (parsed.projectKey) return `${parsed.projectKey}-${parsed.ticket}`;
+    return configured ? `${configured}-${parsed.ticket}` : parsed.ticket;
+}
+
+function featureExportLabel(feature) {
+    const name = String(feature?.name ?? '').trim();
+    const key = jiraKey(activeProject()?.jira?.featureProjectKey || '', feature?.jiraKey);
+    return key ? `${name} (${key})` : name;
+}
+
+const featureTextLabel = featureExportLabel;
+
+function storyExportText(story, projectKey) {
+    const key = jiraKey(projectKey, story?.jiraKey);
+    const title = String(story?.title ?? '').trim();
+    const text = title ? `${key ? `${key} - ` : ''}${title}` : (key || '');
+    return `${text}${story?.points != null ? ` (${story.points || 0})` : ''}`.trim();
+}
+
+const storyTextLabel = storyExportText;
+
+function featureMarkdownLabel(feature, baseUrl = '') {
+    const label = featureExportLabel(feature);
+    const key = jiraKey(activeProject()?.jira?.featureProjectKey || '', feature?.jiraKey);
+    if (!baseUrl || !key) return label;
+    const href = `${baseUrl.replace(/\/+$/, '')}/browse/${encodeURIComponent(key)}`;
+    return `[${label}](${href})`;
+}
+
+function featureExcelCell(feature, baseUrl = '') {
+    const label = featureExportLabel(feature);
+    const key = jiraKey(activeProject()?.jira?.featureProjectKey || '', feature?.jiraKey);
+    if (!baseUrl || !key) return { value: label };
+    const href = `${baseUrl.replace(/\/+$/, '')}/browse/${encodeURIComponent(key)}`;
+    return { value: label, formula: `HYPERLINK("${href}","${label}")` };
+}
+
+function storyMarkdownLabel(story, projectKey, baseUrl = '') {
+    const text = storyExportText(story, projectKey);
+    const key = jiraKey(projectKey, story?.jiraKey);
+    if (!baseUrl || !key) return text;
+    const href = `${baseUrl.replace(/\/+$/, '')}/browse/${encodeURIComponent(key)}`;
+    return `[${text}](${href})`;
+}
+
+function storyExcelCell(story, projectKey, baseUrl = '') {
+    const text = storyExportText(story, projectKey);
+    const key = jiraKey(projectKey, story?.jiraKey);
+    if (!baseUrl || !key) return { value: text };
+    const href = `${baseUrl.replace(/\/+$/, '')}/browse/${encodeURIComponent(key)}`;
+    return { value: text, formula: `HYPERLINK("${href}","${text}")` };
+}
+
+export function serializeForExport(boardState) {
+    const project = activeProject();
+    const featureProjectKey = project?.jira?.featureProjectKey || '';
+    const storyProjectKey = project?.jira?.storyProjectKey || '';
+    const clone = JSON.parse(JSON.stringify(boardState || state));
+    clone.features = (clone.features || []).map(feature => ({
+        ...feature,
+        jiraKey: jiraKey(featureProjectKey, feature.jiraKey),
+        stories: (feature.stories || []).map(story => ({
+            ...story,
+            jiraKey: jiraKey(storyProjectKey, story.jiraKey)
+        }))
+    }));
+    return clone;
+}
+
 export function columns() {
     return [{ id: null, name: 'Backlog', capacity: null }, ...state.sprints];
 }
@@ -23,7 +111,7 @@ export function download(blob, filename) {
 }
 
 export function exportJson() {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(serializeForExport(state), null, 2)], { type: 'application/json' });
     download(blob, `${fileBase()}.json`);
 }
 
@@ -35,6 +123,7 @@ export function csvCell(value) {
 
 export function grid() {
     const cols = columns();
+    const storyProjectKey = activeProject()?.jira?.storyProjectKey || '';
     return {
         cols,
         header: ['Feature', ...cols.map(c => c.name)],
@@ -42,7 +131,7 @@ export function grid() {
         planned: ['Planned', columnLoad(null), ...state.sprints.map(s => sprintLoad(s.id))],
         rows: state.features.map(feature => ({
             feature,
-            lists: cols.map(c => storiesIn(feature, c.id).map(s => `${s.title} (${s.points || 0})`))
+            lists: cols.map(c => storiesIn(feature, c.id).map(s => storyTextLabel(s, storyProjectKey)))
         })),
         total: ['Total points', ...cols.map(c => columnLoad(c.id))]
     };
@@ -54,7 +143,7 @@ export function exportCsv() {
         g.header,
         g.capacity,
         g.planned,
-        ...g.rows.map(r => [r.feature.name, ...r.lists.map(l => l.join('\n'))]),
+        ...g.rows.map(r => [featureExportLabel(r.feature), ...r.lists.map(l => l.join('\n'))]),
         g.total
     ];
     const csv = rows.map(r => r.map(csvCell).join(',')).join('\r\n');
@@ -153,6 +242,14 @@ function colRef(index) {
 
 function sheetCell(colIndex, rowIndex, value, styleIndex) {
     const ref = `${colRef(colIndex)}${rowIndex}`;
+    if (value && typeof value === 'object') {
+        if (value.formula) {
+            return `<c r="${ref}" s="${styleIndex}"><f>${xmlEscape(value.formula)}</f></c>`;
+        }
+        const cellValue = value.value ?? '';
+        if (cellValue === '' || cellValue == null) return `<c r="${ref}" s="${styleIndex}"/>`;
+        return `<c r="${ref}" s="${styleIndex}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(String(cellValue))}</t></is></c>`;
+    }
     if (typeof value === 'number') return `<c r="${ref}" s="${styleIndex}"><v>${value}</v></c>`;
     if (value === '' || value == null) return `<c r="${ref}" s="${styleIndex}"/>`;
     return `<c r="${ref}" s="${styleIndex}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
@@ -162,6 +259,9 @@ const XLSX_CHIP = { s: 72, l: 92, border: 78 };
 
 export function exportXlsx() {
     const g = grid();
+    const cols = columns();
+    const baseUrl = activeProject()?.jira?.jiraBaseUrl || '';
+    const storyProjectKey = activeProject()?.jira?.storyProjectKey || '';
     const width = g.header.length;
 
     const fills = ['<fill><patternFill patternType="none"/></fill>',
@@ -200,14 +300,16 @@ export function exportXlsx() {
     g.rows.forEach((item, i) => {
         const style = featureStyles[i];
         const points = item.feature.stories.reduce((a, s) => a + (s.points || 0), 0);
-        const name = `${item.feature.name}\n${item.feature.stories.length} stories · ${points} pts`;
-        const count = Math.max(1, ...item.lists.map(l => l.length));
+        const name = `${featureExportLabel(item.feature)}\n${item.feature.stories.length} stories · ${points} pts`;
+        const storyLists = cols.map(column => storiesIn(item.feature, column.id)
+            .map(story => storyExcelCell(story, storyProjectKey, baseUrl)));
+        const count = Math.max(1, ...storyLists.map(list => list.length));
         const start = r + 1;
 
         for (let n = 0; n < count; n++) {
             row([
-                { v: n === 0 ? name : '', s: style.name },
-                ...item.lists.map(list => ({ v: list[n] ?? '', s: style.cell }))
+                { v: n === 0 ? featureExcelCell(item.feature, baseUrl) : { value: '' }, s: style.name },
+                ...storyLists.map(list => ({ v: list[n] ?? { value: '' }, s: style.cell }))
             ], count === 1 ? { height: 32 } : undefined);
         }
         if (count > 1) merges.push(`A${start}:A${start + count - 1}`);
@@ -260,6 +362,8 @@ function mdCell(value) {
 
 export function exportMarkdown() {
     const cols = columns();
+    const baseUrl = activeProject()?.jira?.jiraBaseUrl || '';
+    const storyProjectKey = activeProject()?.jira?.storyProjectKey || '';
     const header = ['Feature', ...cols.map(c => c.id ? `${c.name} (${columnLoad(c.id)}/${c.capacity || 0} pts)` : `${c.name} (${columnLoad(null)} pts)`)];
 
     const lines = [
@@ -269,9 +373,9 @@ export function exportMarkdown() {
 
     state.features.forEach(feature => {
         const cells = cols.map(c => storiesIn(feature, c.id)
-            .map(s => `${mdCell(s.title)} (${s.points || 0})`)
+            .map(s => storyMarkdownLabel(s, storyProjectKey, baseUrl))
             .join(', '));
-        lines.push(`| ${mdCell(feature.name)} | ${cells.join(' | ')} |`);
+        lines.push(`| ${mdCell(featureMarkdownLabel(feature, baseUrl))} | ${cells.join(' | ')} |`);
     });
 
     lines.push(`| Total | ${cols.map(c => columnLoad(c.id)).join(' | ')} |`);
@@ -360,14 +464,15 @@ export function exportJpg() {
     const chipTextW = IMG.colW - IMG.cellPad * 2 - 16;
     const layout = state.features.map(feature => {
         ctx.font = fontUi(13, 700);
-        const nameLines = wrap(ctx, feature.name, IMG.featW - IMG.cellPad * 2 - 4);
+        const nameLines = wrap(ctx, featureExportLabel(feature), IMG.featW - IMG.cellPad * 2 - 4);
         const featureH = IMG.cellPad * 2 + nameLines.length * IMG.lineH + 20;
 
         const cells = cols.map(column => storiesIn(feature, column.id).map(story => {
             ctx.font = fontData(12);
             const pointsW = ctx.measureText(String(story.points || 0)).width;
             ctx.font = fontUi(12);
-            const lines = wrap(ctx, story.title, chipTextW - pointsW - 8);
+            const label = storyExportText(story, activeProject()?.jira?.storyProjectKey || '');
+            const lines = wrap(ctx, label, chipTextW - pointsW - 8);
             return { story, lines, pointsW, h: IMG.chipPad * 2 + lines.length * IMG.lineH };
         }));
 
